@@ -1,0 +1,11 @@
+Filename	Total#Reads	NumContigsMatched	NumUnaligned	NumAligned	NumMultiAligned	NumSingleAligned	NumQualSingles	PropQualAligned
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_033_C_Pp_yr2_R1_nof_hybridref.sam	58755815	17233	7079513	51676302	38437520	13238782	51676302	0.880
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_036_C_Pp_yr2_R1_nof_hybridref.sam	5051176	5629	2025947	3025229	2192274	832955	3025229	0.599
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_045_C_Pp_yr2_R1_nof_hybridref.sam	69671379	33780	6693275	62978104	47871227	15106877	62978104	0.904
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_048_C_Pp_yr2_R1_nof_hybridref.sam	33219193	36212	5022788	28196405	20581046	7615359	28196405	0.849
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_049_La_Pp_yr2_R1_nof_hybridref.sam	15531856	28455	2879566	12652290	8228105	4424185	12652290	0.815
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_051_C_Pp_yr2_R1_nof_hybridref.sam	11623318	17189	1821115	9802203	6234939	3567264	9802203	0.843
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_052_La_Pp_yr2_R1_nof_hybridref.sam	15373693	27239	7340479	8033214	5045796	2987418	8033214	0.523
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_054_C_Pp_yr2_R1_nof_hybridref.sam	21453394	19449	2920656	18532738	11913175	6619563	18532738	0.864
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_057_C_Pp_yr2_R1_nof_hybridref.sam	58842917	25314	7536040	51306877	36384313	14922564	51306877	0.872
+/cm/shared/courses/dbarshis/barshislab/VRad/taxons/Porites_porites/R_058_La_Pp_yr2_R1_nof_hybridref.sam	31221869	18915	6235270	24986599	15804188	9182411	24986599	0.800
