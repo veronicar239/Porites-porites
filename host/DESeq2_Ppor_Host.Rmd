@@ -1,0 +1,926 @@
+---
+title: "DESeq2_Ppor_Host"
+author: "Veronica Radice"
+date: "14/04/2021"
+output: html_document
+---
+
+
+# Gene-level differential expression analysis using DESeq2
+## Coral Host
+### *Porites porites*
+
+Excellent tutorial:
+https://github.com/hbctraining/DGE_workshop/tree/master/lessons
+
+# DESeq2 package
+The package DESeq2 provides methods to test for differential expression by use of negative binomial generalized linear models; the estimates of dispersion and logarithmic fold changes incorporate data-driven prior distributions.
+
+Vignette:
+https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+
+# Import libraries
+```{r message=FALSE}
+library(RColorBrewer)
+library(circlize)
+library(pheatmap)
+library(gplots) #heatmap.2()
+library(ComplexHeatmap)
+
+library(tidyverse)
+library(vegan)
+library(cowplot)
+library(ggrepel)
+library(devtools)
+library(vsn)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(knitr)
+library(gridExtra)
+library(data.table)
+
+# first time installation:
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# BiocManager::install("DESeq2")
+# BiocManager::install("DEGreport")
+# BiocManager::install("arrayQualityMetrics")
+library(BiocManager)
+library(DESeq2)
+library(DEGreport)
+library(arrayQualityMetrics)
+library(locfit)
+```
+
+# Set working directory
+```{r}
+setwd("~/Documents/Rprojects/postdoc\ Rprojects/ODU_postdoc_Rprojects/Paper_Ojo_gene-expression/Porites_porites/host/")
+```
+
+# Counts data
+
+As input, the DESeq2 package expects count data as obtained,
+e.g., from RNA-seq in the form of a matrix of integer values.
+The value in the i-th row and the j-th column of the matrix tells
+how many reads can be assigned to gene i in sample j.
+
+The values in the matrix should be un-normalized counts or estimated counts of sequencing reads (for single-end RNA-seq) or fragments (for paired-end RNA-seq).
+
+The DESeq2 model internally corrects for library size, so transformed or normalized values
+such as counts scaled by library size should not be used as input.
+
+# Import raw data
+```{r}
+host <- read.csv("merged_hybridref_counts_Ppor_Host.csv", header=TRUE, row.names=1)
+dim(host)  
+
+## Some genes were not detected in any samples (genes with zero reads across all samples)
+host <- host[rowSums(host) > 0, ]
+dim(host)  
+```
+
+
+# Metadata (conditions)
+
+***NB! It is absolutely critical that the columns of the count matrix and the rows of the column data (information about samples) are in the same order.*** 
+There should be the same number of conditions described as there are samples in your data file, and in the same order.
+
+*rownames of meta have to match the column names of counts file*
+```{r}
+meta <- read.csv("~/Documents/Rprojects/postdoc\ Rprojects/ODU_postdoc_Rprojects/Paper_Ojo_gene-expression/Porites_porites/Porites_porites_Year-2_metadata.csv", header=TRUE, row.names=1)
+
+# Remove all samples that were transplanted to the Destination Ojo.Norte
+# There is no control site for Norte Ojo
+# For now, we are focused on samples transplanted to Laja Control or Laja Ojo sites
+# This is consistent with analyses for the other 2 species in the experiment
+# Also, group sample size is too small for Ojo.Norte destination
+
+meta <- subset(meta, Destination_name != "Ojo.Norte")
+```
+
+
+```{r}
+meta$Destination_type <- revalue(meta$Destination_type, c("control" = "Control", "ojo" = "Ojo"))
+
+meta <- meta %>% unite(group, Origin_type, Destination_type, sep = ".", remove = FALSE)
+
+
+meta[sapply(meta, is.character)] <- lapply(meta[sapply(meta, is.character)], 
+                                       as.factor)
+# Colony_ID is equivalent to genotype
+meta$Colony_ID <- as.factor(meta$Colony_ID)
+
+levels(meta$group)
+```
+
+
+## select relevant metadata
+```{r}
+meta <- dplyr::select(meta, Colony_ID, group, Origin_name, Origin_type, Destination_name, Destination_type, pH_Destination)
+```
+
+
+## Descriptive statistics
+```{r}
+## The do.call() function produces a data frame with one col per sample, 
+## transpose it to obtain one row per sample and one column per statistics.
+stats.per.sample <- data.frame(t(do.call(cbind, lapply(host, summary))))
+
+stats.per.sample$libsum <- apply(host, 2, sum) ## libsum
+stats.per.sample$zeros <- apply(host==0, 2, sum)
+stats.per.sample$percent.zeros <- 100*stats.per.sample$zeros/nrow(host)
+
+head(stats.per.sample)
+```
+
+
+## Distributions
+### Histograms of counts per gene
+
+- Top: raw counts. the scale is determined by the gene with the highest count, which is apparently an outlier.
+- Middle: raw counts, with X axis truncated to 2000 in order to display a representative range despite outliers.
+- Bottom: log2-transformed counts (bottom) per gene, with a pseudocount of 1 to avoid minus infinitevalues resulting from zero counts.
+
+```{r}
+par(mfrow=c(3,1))
+
+hist(as.matrix(host), col="blue", border="white", breaks=50)
+
+hist(as.matrix(host), col="blue", border="white",
+     breaks=20000, xlim=c(0,500), main="Counts per gene",
+     xlab="Counts (truncated axis)", ylab="Number of genes", 
+     las=1, cex.axis=0.7)
+
+epsilon <- 1 # pseudo-count to avoid problems with log(0)
+hist(as.matrix(log2(host + epsilon)), breaks=100, col="blue", border="white",
+     main="Log2-transformed counts per gene", xlab="log2(counts+1)", ylab="Number of genes",
+     las=1, cex.axis=0.7)
+```
+
+
+### Boxplots of gene count distributions per sample (non-normalized log2(counts))
+```{r}
+boxplot(log2(host + epsilon), col=meta$group, pch=".", 
+        horizontal=TRUE, cex.axis=0.5, las=1, 
+        xlab="log2(Counts +1)")
+```
+
+
+### Density plots (log2(counts))
+```{r message=FALSE}
+if(!require("affy")){
+  source("http://bioconductor.org/biocLite.R")
+  biocLite("affy")  
+}
+library(affy)
+
+## Each curve corresponds to one sample 
+plotDensity(log2(host + epsilon), lty=1, col= meta$group, lwd=2)
+grid()
+```
+**NB!** the R function plotDensity() does not display the actual distribution of your values, but a polynomial fit. The representation thus generally looks smoother than the actual data. It is important to realize that, in some particular cases, the fit can lead to extrapolated values which can be misleading.
+
+
+
+# Filtering
+
+The filtering of low-expression genes is a common practice in the analysis of RNA-seq data. There are several reasons for this. For the detection of differentially expressed genes (DEGs) and from a biological point of view, genes that not expressed at a biologically meaningful level in any condition are not of interest and are therefore best ignored, but also because it can increase the number of total DEGs after correction of multiple testing, improving sensitivity and the precision of DEGs after filtering (Bourgon et al., 2010).
+
+In addition, genes/transcripts having a low read count are generally considered as artifacts or ‘noise’. From a statistical point of view, removing low count genes allows the mean-variance relationship in the data to be estimated with greater reliability (Law et al., 2016).
+
+https://seqqc.wordpress.com/2020/02/17/removing-low-count-genes-for-rna-seq-downstream-analysis/
+
+```{r}
+# how many genes have mean count >=3 
+host_means_filtered <- cbind(host, means = apply(host, 1, mean))
+table(host_means_filtered$means>=3)
+
+host_means_filtered <- subset(host_means_filtered, host_means_filtered$means>=3)
+host_means_filtered <- host_means_filtered[, 1:10]
+dim(host_means_filtered)
+```
+
+
+Although RNA-seq technology has improved the dynamic range of gene expression quantification, low-expression genes may be indistinguishable from sampling noise. The presence of noisy, low-expression genes can decrease the sensitivity of detecting DEGs. Thus, identification and filtering of these low-expression genes may improve DEG detection sensitivity.
+
+Genes with very low counts across all samples provide little evidence for differential expression and they interfere with some of the statistical approximations that are used later in the pipeline. They also add to the multiple testing burden when estimating false discovery rates, reducing power to detect differentially expressed genes. These genes should be filtered out prior to further analysis.
+
+For RNA-seq summarized to counts, suggestion to filter on absolute counts, since one could make the argument that genes with low observed counts are probably not really expressed, or that their expression cannot be reliably measured. Furthermore, low count data (which usually also contains many zeros) are not really suitable for a correlation analysis. This simple approach works fine for bulk (tissue) sequencing data but be very careful about applying it to single-cell sequencing where many interesting genes may have zero counts in most cells, and relatively low counts in the rest. 
+
+
+### Boxplots of gene count distributions per sample
+```{r}
+boxplot(log2(host_means_filtered + epsilon), col=meta$group, pch=".", 
+        horizontal=TRUE, cex.axis=0.5, las=1, 
+        xlab="log2(Counts +1)")
+```
+
+
+### Percentage of null counts
+```{r}
+prop.null <- apply(host_means_filtered, 2, function(x) 100*mean(x==0))
+
+barplot(prop.null, main="Percentage of null counts per sample", 
+        horiz=TRUE, cex.names=0.5, las=1, 
+        col=meta$group, ylab='Samples', xlab='% of null counts')
+```
+
+
+Note:  1 sample has >85% of null (zero) counts
+```{r}
+prop.null[order(prop.null)]
+```
+
+
+Remove sample(s) with >85% of null/zero counts
+```{r}
+drop <- c("R_051_C_Pp_yr2")
+
+host_means_filtered <- host_means_filtered[,!(names(host_means_filtered) %in% drop)]
+meta <- meta[!(row.names(meta) %in% drop),]
+
+prop.null <- apply(host_means_filtered, 2, function(x) 100*mean(x==0))
+prop.null[order(prop.null)]
+```
+
+
+```{r}
+prop.null <- apply(host_means_filtered, 2, function(x) 100*mean(x==0))
+
+barplot(prop.null, main="Percentage of null counts per sample", 
+        horiz=TRUE, cex.names=0.5, las=1, 
+        col=meta$group, ylab='Samples', xlab='% of null counts')
+```
+
+
+## data summary
+```{r}
+meta %>%
+  group_by(group) %>%
+  dplyr::summarise(count = n())
+```
+
+
+##############################################################################
+
+# RNA-seq count distribution
+To determine the appropriate statistical model, we need information about the distribution of counts. 
+
+These images illustrate some common features of RNA-seq count data, including 
+- a low number of counts associated with a large proportion of genes, and 
+- a long right tail due to the lack of any upper limit for expression.
+
+```{r}
+# To get an idea about how RNA-seq counts are distributed, plot counts for a couple samples
+p1 <- ggplot(host_means_filtered) +
+  geom_histogram(aes(x = R_045_C_Pp_yr2), stat = "bin", bins = 200) +
+  xlim(-5, 500)  +
+  xlab("Raw expression counts") +
+  ylab("Number of genes")
+
+p2 <- ggplot(host_means_filtered) +
+  geom_histogram(aes(x = R_058_La_Pp_yr2), stat = "bin", bins = 200) +
+  xlim(-5, 500)  +
+  xlab("Raw expression counts") +
+  ylab("Number of genes")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+
+# Modeling count data
+
+Count data is often modeled using the binomial distribution, which can give you the probability of getting a number of heads upon tossing a coin a number of times. However, not all count data can be fit with the binomial distribution. The binomial is based on discrete events and used in situations when you have a certain number of cases.
+
+When the number of cases is very large (i.e. people who buy lottery tickets), but the probability of an event is very small (probability of winning), the Poisson distribution is used to model these types of count data. The Poisson is similar to the binomial, but is based on continuous events. Details provided by Rafael Irizarry in the EdX class.
+
+With RNA-Seq data, a very large number of RNAs are represented and the probability of pulling out a particular transcript is very small. Thus, it would be an appropriate situation to use the Poisson distribution. However, a unique property of this distribution is that the mean == variance. Realistically, with RNA-Seq data there is always some biological variation present across the replicates (within a sample class). Genes with larger average expression levels will tend to have larger observed variances across replicates.
+
+If the proportions of mRNA stayed exactly constant between the biological replicates for each sample class, we could expect Poisson distribution (where mean == variance). A nice description of this concept is presented by Rafael Irizarry in the EdX class. But this doesn't happen in practice, and so the Poisson distribution is only considered appropriate for a single biological sample.
+
+The model that fits best, given this type of variability between replicates, is the Negative Binomial (NB) model. Essentially, the NB model is a good approximation for data where the mean < variance, as is the case with RNA-Seq count data.
+
+
+## plot the mean versus the variance of your data
+
+*Remember for the Poisson model, mean = variance, but for Negative Binomial, mean < variance*
+```{r}
+mean_counts <- apply(host_means_filtered, 1, mean) 
+variance_counts <- apply(host_means_filtered, 1, var) 
+df <- data.frame(mean_counts, variance_counts)
+
+ggplot(df) +
+        geom_point(aes(x=mean_counts, y=variance_counts)) + 
+        geom_line(aes(x=mean_counts, y=mean_counts, color="red")) +
+        scale_y_log10() +
+        scale_x_log10() +
+        theme(legend.position = "none")
+```
+
+Note that in the above figure, the variance across replicates tends to be greater than the mean (red line), especially for genes with large mean expression levels. This is a good indication that our data do not fit the Poisson distribution and we need to account for this increase in variance using the Negative Binomial model (i.e. Poisson will underestimate variability leading to an increase in false positive DE genes).
+
+
+# How does the dispersion relate to our model?
+
+To accurately model sequencing counts, we need to generate accurate estimates of within-group variation (variation between replicates of the same sample group) for each gene. With only a few (3-6) replicates per group, the estimates of variation for each gene are often unreliable (due to the large differences in dispersion for genes with similar means).
+
+To address this problem, DESeq2 shares information across genes to generate more accurate estimates of variation based on the mean expression level of the gene using a method called 'shrinkage'. DESeq2 assumes that genes with similar expression levels have similar dispersion.
+
+Estimating the dispersion for each gene separately:
+    To model the dispersion based on expression level (mean counts of replicates), the dispersion for each gene is estimated using maximum likelihood estimation. In other words, given the count values of the replicates, the most likely estimate of dispersion is calculated.
+
+
+#####################################################################
+
+# Count normalization using DESeq2
+
+***Ensure the row names of the metadata dataframe are present and in the same order as the column names of the counts dataframe.***
+
+To create the object we will need the count matrix and the metadata table as input.
+We will also need to specify a design formula.
+The design formula specifies the column(s) in the metadata table and how they should be used in the analysis.
+
+```{r}
+# Check that sample names match in both files
+all(colnames(host_means_filtered) %in% rownames(meta))
+all(colnames(host_means_filtered) == rownames(meta))
+# If your data did not match, you could use the match() function to rearrange them to be matching.
+```
+
+```{r}
+levels(meta$group)
+```
+
+# Create DESeq2 Dataset object
+```{r}
+# can only do 2 group comparisons (limitation of DESeq2)
+
+dds <- DESeqDataSetFromMatrix(countData = host_means_filtered,
+                              colData = meta,
+                              design= ~group) 
+```
+
+Note that neither rlog transformation nor the VST are used by the differential expression estimation in DESeq, which always occurs on the raw count data, through generalized linear modeling which incorporates knowledge of the variance-mean dependence. The rlog transformation and VST are offered as separate functionality which can be used for visualization, clustering or other machine learning tasks. 
+
+
+#####################################################################
+
+# Count data transformation
+
+In order to test for differential expression, we operate on raw counts and use discrete distributions as described in the previous section on differential expression. However for other downstream analyses – e.g. for visualization or clustering – it is useful to work with transformed versions of the count data.
+
+*Both transformations produce transformed data on the log2 scale which has been normalized with respect to library size or other normalization factors.*
+
+The point of these two transformations, the VST and the rlog, is to remove the dependence of the variance on the mean, particularly the high variance of the logarithm of count data when the mean is low. In particular, genes with low expression level and therefore low read counts tend to have high variance, which is not removed efficiently by the ordinary logarithmic transformation.
+
+Both VST and rlog use the experiment-wide trend of variance over mean, in order to transform the data to remove the experiment-wide trend. Note that we do not require or desire that all the genes have exactly the same variance after transformation. Indeed, in a figure below, you will see that after the transformations the genes with the same mean do not have exactly the same standard deviations, but that the experiment-wide trend has flattened. It is those genes with row variance above the trend which will allow us to cluster samples into interesting groups.
+
+
+# blind transformation to experimental design (TRUE / FALSE)
+
+- blind=TRUE should be used for comparing samples in a manner unbiased by prior information
+on samples, for example to perform sample QA (quality assurance).
+- blind=FALSE should be used for transforming data for downstream analysis,
+where the full use of the design information should be made.
+- blind=FALSE will skip re-estimation of the dispersion trend, if this has already been calculated.
+
+*If many of genes have large differences in counts due to the experimental design, it is important to set blind=FALSE for downstream analysis.*
+
+Blind dispersion estimation is not the appropriate choice if one expects that many or the majority of genes (rows) will have large differences in counts which are explainable by the experimental design, and one wishes to transform the data for downstream analysis. In this case, using blind dispersion estimation will lead to large estimates of dispersion, as it attributes differences due to experimental design as unwanted noise, and will result in overly shrinking the transformed values towards each other. By setting blind to FALSE, the dispersions already estimated will be used to perform transformations, or if not present, they will be estimated using the current design formula. Note that only the fitted dispersion estimates from mean-dispersion trend line are used in the transformation (the global dependence of dispersion on mean for the entire experiment). So setting blind to FALSE is still for the most part not using the information about which samples were in which experimental group in applying the transformation.
+
+
+# varianceStabilizingTransformation
+
+This function calculates a variance stabilizing transformation (VST) from the fitted dispersion mean relation(s) and then transforms the count data (normalized by division by the size factors or normalization factors), yielding a matrix of values which are now approximately homoskedastic (having constant variance along the range of mean values). The transformation also normalizes with respect to library size. 
+
+The rlog is less sensitive to size factors, which can be an issue when size factors vary widely. These transformations are useful when checking for outliers or as input for machine learning techniques such as clustering or linear discriminant analysis.
+
+The transformed data should be approximated variance stabilized and also includes correction for size factors or normalization factors. The transformed data is on the log2 scale for large counts.
+
+Limitations: In order to preserve normalization, the same transformation has to be used for all samples. This results in the variance stabilizition to be only approximate. The more the size factors differ, the more residual dependence of the variance on the mean will be found in the transformed data. rlog is a transformation which can perform better in these cases. As shown in the vignette, the function meanSdPlot from the package vsn can be used to see whether this is a problem.
+
+**NB! vst() is a wrapper for the varianceStabilizingTransformation()**
+    vst()  provides much faster estimation of the dispersion trend used to determine the formula for the VST. The speed-up is accomplished by subsetting to a smaller number of genes in order to estimate this dispersion trend. The subset of genes is chosen deterministically, to span the range of genes' mean normalized count. This wrapper for the VST is not blind to the experimental design: the sample covariate information is used to estimate the global trend of genes' dispersion values over the genes' mean normalized count. It can be made strictly blind to experimental design by first assigning a design of ~1 before running this function, or by avoiding subsetting and using varianceStabilizingTransformation.
+
+
+### fitType:  
+In case dispersions have not yet been estimated for object, 
+this parameter is passed on to estimateDispersions().
+
+If estimateDispersions was called with:
+
+    - fitType="parametric", a closed-form expression for the variance stabilizing transformation is used on the normalized count data. 
+    - fitType="local", the reciprocal of the square root of the variance of the normalized counts, as derived from the dispersion fit, is then numerically integrated, and the integral (approximated by a spline function) is evaluated for each count value in the column, yielding a transformed value.
+    - fitType="mean", a VST is applied for Negative Binomial distributed counts, ’k’, with a fixed dispersion, ’a’: ( 2 asinh(sqrt(a k)) - log(a) - log(4) )/log(2).
+
+In all cases, the transformation is scaled such that for large counts, it becomes asymptotically (for large values) equal to the logarithm to base 2 of normalized counts.
+
+
+#### transformed counts - vst Blind = TRUE
+```{r}
+vsdBlindTrue <- DESeq2::varianceStabilizingTransformation(dds, blind = TRUE, fitType = "parametric")
+
+boxplot(assay(vsdBlindTrue), col=meta$group)
+```
+
+#### transformed counts - vst Blind = FALSE
+```{r}
+vsdBlindFalse <- DESeq2::varianceStabilizingTransformation(dds, blind = FALSE, fitType = "parametric")
+
+boxplot(assay(vsdBlindFalse), col=meta$group)
+```
+
+
+# rlogged transformation
+Useful for various unsupervised clustering analyses.
+
+Warning message (but not an error): "rlog() may take a few minutes with 30 or more samples,
+vst() is a much faster transformation"
+
+#### transformed counts - rlogged Blind = TRUE
+```{r message = FALSE}
+rlogged.BlindTrue = rlogTransformation(dds, blind = TRUE)
+
+boxplot(assay(rlogged.BlindTrue), col=meta$group)
+```
+
+
+#### transformed counts - rlogged Blind = FALSE
+```{r message = FALSE}
+rlogged.BlindFalse = rlogTransformation(dds, blind = FALSE)
+
+boxplot(assay(rlogged.BlindFalse), col=meta$group)
+```
+
+
+
+# Effects of transformations on the variance
+
+The figure below plots the standard deviation of the transformed data, across samples, against the mean, using the shifted logarithm transformation, the regularized log transformation and the variance stabilizing transformation. The shifted logarithm has elevated standard deviation in the lower count range, and the regularized log to a lesser extent, while for the variance stabilized data the standard deviation is roughly constant along the whole dynamic range.
+
+Note that the vertical axis in such plots is the square root of the variance over all samples, so including the variance due to the experimental conditions. While a flat curve of the square root of variance over the mean may seem like the goal of such transformations, this may be unreasonable in the case of datasets with many true differences due to the experimental conditions.
+
+## Plot row standard deviations versus row means
+
+The scatterplot of these versus each other allows you to visually verify whether there is a dependence of the standard deviation (or variance) on the mean. The red line depicts the running median estimator (window-width 10%). If there is no variance-mean dependence, then the line should be approximately horizontal.
+
+```{r}
+# this gives log2(n + 1)
+ntd <- normTransform(dds)
+meanSdPlot(assay(ntd))
+```
+
+
+```{r}
+meanSdPlot(assay(vsdBlindTrue))
+```
+
+
+```{r}
+meanSdPlot(assay(vsdBlindFalse))
+```
+
+```{r}
+meanSdPlot(assay(rlogged.BlindTrue))
+```
+
+
+```{r}
+meanSdPlot(assay(rlogged.BlindFalse)) 
+```
+
+#### Cluster dendrogram - rlog Blind = FALSE
+```{r}
+dists.rlog.BlindFalse <- dist(t(assay(rlogged.BlindFalse)))
+plot(hclust(dists.rlog.BlindFalse))
+```
+
+
+#### Cluster dendrogram - vst Blind = FALSE
+```{r}
+dists.vsdBlindFalse <- dist(t(assay(vsdBlindFalse)))
+plot(hclust(dists.vsdBlindFalse))
+```
+
+
+# save transformed count data
+
+The input file has to contain all the genes, not just differentially expressed ones. 
+Note that you can use the resulting transformed values only for visualization and clustering (not for differential expression analysis which needs raw counts)
+
+```{r}
+# save varianceStabilizingTransformation counts
+saveRDS(vsdBlindFalse, file = "counts_vst.BlindFalse_Ppor_Host.rds")
+
+# later, after you already created the file, can load the existing file:
+#vsdBlindFalse <- readRDS("counts_vst.BlindFalse_Ppor_Host.rds")
+```
+
+
+
+##############################################################################
+
+# Obtain normalized counts data 
+
+To perform the median of ratios method of normalization, DESeq2 has a single estimateSizeFactors() function that will generate size factors for us. We will use the function in the example below, but in a typical RNA-seq analysis this step is automatically performed by the DESeq2() function.
+
+```{r, message=FALSE}
+dds <- estimateSizeFactors(dds)
+plot(sort(sizeFactors(dds)))
+```
+
+
+### Normalization factor applied to each sample
+```{r}
+#sort.list(sizeFactors(dds))
+sizeFactors(dds)
+order(sizeFactors(dds), decreasing = TRUE)
+```
+
+
+NOTE: DESeq2 doesn't actually use normalized counts, rather it uses the raw counts
+and models the normalization inside the Generalized Linear Model (GLM).
+
+These normalized counts will be useful for downstream visualization of results,
+but cannot be used as input to DESeq2 or any other tools that perform differential expression analysis which use the negative binomial model.
+
+# Normalized counts
+```{r}
+# to retrieve the normalized counts matrix from dds
+normalized_counts <- counts(dds, normalized=TRUE)
+
+rownames(normalized_counts) <- rownames(host_means_filtered)
+
+# Save normalized counts table as R data file for later use
+saveRDS(normalized_counts, file = "counts_normalized_Ppor_Host.rds")
+
+normalized_counts <- as.data.frame.array(normalized_counts)
+setDT(normalized_counts, keep.rownames = "gene")
+
+# Save normalized data matrix for later use:
+write.csv(normalized_counts, "counts_normalized_Ppor_Host.csv", row.names = F)
+```
+
+### Total number of raw counts per sample
+```{r}
+colSums(counts(dds))[order(colSums(counts(dds)))]
+```
+
+### Barplot raw counts
+```{r}
+colSums(counts(dds)) %>% barplot(col=meta$group)
+```
+
+### Total number of normalized counts per sample
+```{r}
+# How do the numbers correlate with the size factor?
+# Now take a look at the total depth after normalization using:
+#colSums(counts(dds, normalized=T))
+
+colSums(counts(dds, normalized=T))[order(colSums(counts(dds, normalized=T)))]
+```
+
+### Barplot Normalized counts
+```{r}
+colSums(counts(dds, normalized = T)) %>% barplot(col=meta$group)
+```
+
+
+
+##############################################################################
+
+# Quality Control
+
+A useful initial step in an RNA-seq analysis is often to assess overall similarity between samples:
+
+   - Which samples are similar to each other, which are different?
+   - Does this fit to the expectation from the experiment’s design?
+   - What are the major sources of variation in the dataset?
+
+To explore the similarity of our samples, we will be performing sample-level QC using Principal Component Analysis (PCA) and hierarchical clustering methods. Our sample-level QC allows us to see how well our replicates cluster together, as well as, observe whether our experimental condition represents the major source of variation in the data. Performing sample-level QC can also identify any sample outliers, which may need to be explored further to determine whether they need to be removed prior to DE analysis.
+
+When using these unsupervised clustering methods, log2-transformation of the normalized counts improves the distances/clustering for visualization. DESeq2 uses a regularized log transform (rlog) of the normalized counts for sample-level QC as it moderates the variance across the mean, improving the clustering.
+
+*Here I use varianceStablizingTransformation() transformed counts*
+
+# Principal Component Analysis (PCA)
+*Exploratory*
+
+By default the function uses the top 500 most variable genes. You can change this by adding the ntop argument and specifying how many genes you want to use to draw the plot.
+
+# PCA - Group
+```{r}
+pcadata = DESeq2::plotPCA(vsdBlindFalse, intgroup = c( "group"), returnData = TRUE)
+percentVar = round(100 * attr(pcadata, "percentVar"))
+pca = prcomp(t(assay(vsdBlindFalse)), center = TRUE, scale. = FALSE)
+
+DESeq2::plotPCA(vsdBlindFalse, returnData = TRUE, intgroup = c("group")) %>% 
+      ggplot(aes(x = PC1, y = PC2)) +
+      geom_point(aes(colour = group), size = 2) +
+      stat_ellipse(geom = "polygon", alpha = 1/10, aes(fill = group)) +
+      xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+      ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+      theme_cowplot()
+```
+
+
+# PCA - Destination
+```{r}
+pcadata = DESeq2::plotPCA(vsdBlindFalse, intgroup = c("Destination_name"), returnData = TRUE)
+percentVar = round(100 * attr(pcadata, "percentVar"))
+pca = prcomp(t(assay(vsdBlindFalse)), center = TRUE, scale. = FALSE)
+
+DESeq2::plotPCA(vsdBlindFalse, returnData = TRUE, intgroup = c("Destination_name") ) %>% 
+      ggplot(aes(x = PC1, y = PC2)) +
+      geom_point(aes(colour = Destination_name), size = 2) +
+      stat_ellipse(geom = "polygon", alpha = 1/10, aes(fill = Destination_name)) +
+      xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+      ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+      theme_cowplot()
+```
+
+
+# PCA - Colony
+```{r}
+pcadata = DESeq2::plotPCA(vsdBlindFalse, intgroup = c("Colony_ID"), returnData = TRUE)
+percentVar = round(100 * attr(pcadata, "percentVar"))
+pca = prcomp(t(assay(vsdBlindFalse)), center = TRUE, scale. = FALSE)
+
+DESeq2::plotPCA(vsdBlindFalse, returnData = TRUE, intgroup = c("Colony_ID")) %>% 
+      ggplot(aes(x = PC1, y = PC2)) +
+      geom_point(aes(colour = Colony_ID), size = 2) +
+      xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+      ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+      theme_cowplot()
+```
+
+
+##############################################################################
+
+# Hierarchical Clustering
+
+Since there is no built-in function for heatmaps in DESeq2 we will be using the pheatmap() function from the pheatmap package. This function requires a matrix/dataframe of numeric values as input, and so the first thing we need to is retrieve that information from the rld object:
+
+### Extract the rlog matrix from the object
+```{r}
+rld_mat <- assay(vsdBlindFalse) 
+```
+
+### Compute pairwise correlation values
+```{r}
+rld_cor <- cor(rld_mat)    
+#head(rld_cor)   ## check the output of cor(), make note of the rownames and colnames
+```
+
+# Plot the correlation values as a heatmap:
+```{r}
+pheatmap(rld_cor)
+```
+
+
+# Correlation of gene expression for all pairwise combinations of samples
+## Hierarchical Clustering Heatmap
+
+This figure takes overall expression and clusters samples based on euclidean distances.
+```{r}
+# sample by distance heatmap
+sampleDists <- as.matrix(dist(t(assay(vsdBlindFalse))))
+heatmap.2(as.matrix(sampleDists), key=F, trace="none",
+          col=colorpanel(100, "black", "white"),
+          margin=c(10, 10))
+```
+
+
+# Gene-level QC
+In addition to examining how well the samples/replicates cluster together, there are a few more QC steps. Prior to differential expression analysis it is beneficial to omit genes that have little or no chance of being detected as differentially expressed. This will increase the power to detect differentially expressed genes. The genes omitted fall into three categories:
+
+    - Genes with zero counts in all samples
+    - Genes with an extreme count outlier
+    - Genes with a low mean normalized counts (independent filtering)
+
+DESeq2 will perform this filtering by default; however other DE tools, such as EdgeR will not. Filtering is a necessary step, even if you are using limma-voom and/or edgeR's quasi-likelihood methods. Be sure to follow pre-filtering steps when using other tools, as outlined in their user guides found on Bioconductor as they generally perform much better.
+
+
+
+##############################################################################
+
+# Differential expression analysis 
+## based on the Negative Binomial (a.k.a. Gamma-Poisson) distribution
+
+Function performs a default analysis through the steps:
+  - estimation of size factors: estimateSizeFactors
+  - estimation of dispersion: estimateDispersions
+  - Negative Binomial GLM fitting and Wald statistics: nbinomWaldTest
+  
+In this step we essentially want to determine whether the mean expression levels of different sample groups are significantly different.
+
+***Wald test:***  the shrunken estimate of LFC is divided by its standard error, resulting in a z-statistic, which is compared to a standard normal distribution.
+
+***In DESeq2, we assume that genes of similar average expression strength have similar dispersion.***
+https://genomebiology.biomedcentral.com/articles/10.1186/s13059-014-0550-8 
+
+  - We first treat each gene separately and estimate gene-wise dispersion estimates (using maximum likelihood), which rely only on the data of each individual gene (black dots in Figure 1). 
+  - Next, we determine the location parameter of the distribution of these estimates; to allow for dependence on average expression strength, we fit a smooth curve, as shown by the red line in Figure 1. 
+  - This provides an accurate estimate for the expected dispersion value for genes of a given expression strength but does not represent deviations of individual genes from this overall trend. 
+  - We then shrink the gene-wise dispersion estimates toward the values predicted by the curve to obtain final dispersion values (blue arrow heads).
+  - We use an empirical Bayes approach, which lets the strength of shrinkage depend (i) on an estimate of how close true dispersion values tend to be to the fit and (ii) on the degrees of freedom: as the sample size increases, the shrinkage decreases in strength, and eventually becomes negligible. 
+  - Our approach therefore accounts for gene-specific variation to the extent that the data provide this information, while the fitted curve aids estimation and testing in less information-rich settings.
+
+
+### fitType = parameteric
+  - a closed-form expression for the variance stabilizing transformation (vst) is used on the normalized count data.
+  - a dispersion-mean relation of the form:
+
+      dispersion = asymptDisp + extraPois / mean
+
+  - via a robust gamma-family GLM. 
+  - coefficients asymptDisp and extraPois are given in the attribute coefficients of the dispersionFunction of the object.
+  
+```{r}
+# Generate normalized counts
+# perform the median of ratios method of normalization
+# perform a Wald test in DESeq2 pairwise comparison between treatment effects
+
+dds <- DESeq2::DESeq(dds, fitType = "parametric", test = "Wald")
+```
+
+
+```{r}
+results.dds = results(dds)
+head(results.dds)
+```
+
+
+```{r}
+dispersionFunction(dds)
+```
+
+
+# Fit curve to gene-wise dispersion estimates
+
+This curve is displayed as a red line in the figure below, which plots the estimate for the expected dispersion value for genes of a given expression strength. Each black dot is a gene with an associated mean expression level and maximum likelihood estimation (MLE) of the dispersion
+
+The curve allows for more accurate identification of differentially expressed genes when sample sizes are small, and the strength of the shrinkage for each gene depends on :
+
+    - how close gene dispersions are from the curve
+    - sample size (more samples = less shrinkage)
+
+This shrinkage method is particularly important to reduce false positives in the differential expression analysis. Genes with low dispersion estimates are shrunken towards the curve, and the more accurate, higher shrunken values are output for fitting of the model and differential expression testing.
+
+Dispersion estimates that are slightly above the curve are also shrunk toward the curve for better dispersion estimation; however, genes with extremely high dispersion values are not. This is due to the likelihood that the gene does not follow the modeling assumptions and has higher variability than others for biological or technical reasons [1]. Shrinking the values toward the curve could result in false positives, so these values are not shrunken. These genes are shown surrounded by blue circles below.
+
+This is a good plot to examine to ensure your data is a good fit for the DESeq2 model. You expect your data to generally scatter around the curve, with the dispersion decreasing with increasing mean expression levels. If you see a cloud or different shapes, then you might want to explore your data more to see if you have contamination (mitochondrial, etc.) or outlier samples. Note how much shrinkage you get across the whole range of means in the plotDispEsts() plot for any experiment with low degrees of freedom.
+
+## Plot dispersion estimates - fitType = "parametric" 
+
+***NB! "parametric" is the default, unless the fit fails, then automatically will be replaced with another fitType (if applicable, will see this in Warning message after running DESeq() function above)***
+
+```{r}
+# already accomplished as part of DESeq() function (above):
+#dds <- DESeq2::estimateSizeFactors(dds)
+#dds <- DESeq2::estimateDispersionsGeneEst(dds)
+#dds <- DESeq2::estimateDispersionsFit(dds)
+#dds <- DESeq2::estimateDispersionsMAP(dds)
+
+DESeq2::plotDispEsts(dds)
+```
+
+
+```{r}
+head(dispersions(dds))  # parametric
+```
+
+
+All of the intermediate values (gene-wise dispersion estimates, fitted dispersion estimates from the trended fit, etc.) are stored in mcols(dds), with information about these columns in mcols(mcols(dds)).
+
+```{r}
+rownames(mcols(mcols(dds)))
+```
+
+
+#### Distribution of residuals
+```{r}
+dispersions(dds) %>% hist(breaks = 500)
+```
+
+
+
+##########################################################################
+
+# Differential expression analysis with DESeq2: model fitting and hypothesis testing
+Evaluate contrasts
+
+```{r}
+# It can be useful to include the sample names in the data set object:
+rownames(dds) <- rownames(host_means_filtered)
+```
+
+
+```{r}
+levels(dds$group)
+```
+
+
+Note that the 'results' function automatically performs independent filtering based on the mean of normalized counts for each gene, optimizing the number of genes which will have an adjusted p value below a given FDR cutoff, alpha.
+
+
+##########################################################################
+
+# Pairwise contrasts
+
+***In each pairwise contrast, we should have the treatment condition first, and the control condition second in the log2 fold change (MLE) output.***
+
+**Groups:**
+"Reef.Control"   "Reef.Ojo"
+
+RO_RC
+"Reef.Ojo", "Reef.Control"
+
+
+## "Reef.Ojo", "Reef.Control"
+
+p-adj < 0.1
+```{r}
+results_RO_RC_.1 <- results(dds, contrast = c("group", "Reef.Ojo", "Reef.Control"), alpha = 0.1)
+head(results_RO_RC_.1)
+```
+
+```{r}
+summary(results_RO_RC_.1)
+```
+
+
+```{r}
+### convert to dataframe (from DESeq2 object)
+res_RO_RC_.1_df <- data.frame(results_RO_RC_.1)
+
+DE_RO_RC_padj.1 <- res_RO_RC_.1_df %>% 
+  rownames_to_column('gene') %>% 
+  as_tibble() %>%
+  filter(padj < 0.1) %>% 
+    arrange(padj)
+
+head(DE_RO_RC_padj.1)
+
+# save rlogged file
+saveRDS(DE_RO_RC_padj.1, file = "Ppor_Host_DE_genes_RO_RC_padj.1.rds")
+write.csv(DE_RO_RC_padj.1, "Ppor_Host_DE_genes_RO_RC_padj.1.csv")
+```
+
+
+### Pairwise contrast:  up- vs. down-regulated genes
+```{r}
+up.results_RO_RC_padj.1 = row.names(results_RO_RC_.1[results_RO_RC_.1$padj<0.1 & !(is.na(results_RO_RC_.1$padj)) & results_RO_RC_.1$log2FoldChange>0,])
+
+up.results_RO_RC_padj.1 <- as.data.frame(up.results_RO_RC_padj.1)
+up.results_RO_RC_padj.1$DEG <- 'Up'
+
+down.results_RO_RC_padj.1 = row.names(results_RO_RC_.1[results_RO_RC_.1$padj<0.1 & !(is.na(results_RO_RC_.1$padj)) & results_RO_RC_.1$log2FoldChange<0,])
+
+down.results_RO_RC_padj.1 <- as.data.frame(down.results_RO_RC_padj.1)
+down.results_RO_RC_padj.1$DEG <- 'Down'
+
+RO_RC_padj.1_summary <- merge(up.results_RO_RC_padj.1, down.results_RO_RC_padj.1, all=T)
+dim(RO_RC_padj.1_summary)
+
+# save file
+write.csv(RO_RC_padj.1_summary, file="Ppor_Host_DE_genes_RO_RC_padj.1_summary.csv")
+```
+
+
+#### arrange by lowest *p-values*
+
+This is later used as input for PERMANOVA
+```{r}
+DE_RO_RC_pvalue <- res_RO_RC_.1_df %>%
+  rownames_to_column('gene') %>% 
+  as_tibble() %>%
+  filter(pvalue < 0.05) %>% 
+    arrange(pvalue)
+
+head(DE_RO_RC_pvalue)
+
+# save rlogged file
+saveRDS(DE_RO_RC_pvalue, file = "Ppor_Host_RO_RC_pval.05.rds")
+write.csv(DE_RO_RC_pvalue, "Ppor_Host_RO_RC_pval.05.csv")
+```
+
+```{r}
+dim(DE_RO_RC_pvalue)
+```
+
+
+
+```{r}
+mcols(results_OO_LC_.1)$description
+```
+
+
+# Session Info
+```{r}
+sessionInfo()
+```
+

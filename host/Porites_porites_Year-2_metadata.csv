@@ -1,0 +1,11 @@
+Sample_ID,Year_transplant,Origin_code,Origin_name,Origin_type,treatment_Origin-Dest,Destination_code,Destination_type,Destination_name,pH_Destination,id,species,origin,transplant.saturation,transplant,transplant.position,Colony_ID,coral.collection.date_YYYY-MM-DD,RTE.deployment.date_YYYY-MM-DD,sampling.date.RNAlater_year2_YYYY-MM-DD,Sequence
+R_033_C_Pp_yr2,Year2,R,Reef,Reef,reef_control,C,control,Control.Laja,High,33,Porites porites,Reef,high,Control,C55,454,15/12/12,17/12/12,15/1/15,Yes
+R_036_C_Pp_yr2,Year2,R,Reef,Reef,reef_control,C,control,Control.Laja,High,36,Porites porites,Reef,high,Control,C13,610,15/12/12,17/12/12,15/1/15,Yes
+R_045_C_Pp_yr2,Year2,R,Reef,Reef,reef_control,C,control,Control.Laja,High,45,Porites porites,Reef,high,Control,C18,144,15/12/12,17/12/12,15/1/15,Yes
+R_048_C_Pp_yr2,Year2,R,Reef,Reef,reef_control,C,control,Control.Laja,High,48,Porites porites,Reef,high,Control,C5,199,15/12/12,17/12/12,15/1/15,Yes
+R_049_La_Pp_yr2,Year2,R,Reef,Reef,reef_ojo,La,ojo,Ojo.Laja,Low,49,Porites porites,Reef,low,Laja,L55,199,15/12/12,17/12/12,15/1/15,Yes
+R_051_C_Pp_yr2,Year2,R,Reef,Reef,reef_control,C,control,Control.Laja,High,51,Porites porites,Reef,high,Control,C53,124,15/12/12,17/12/12,15/1/15,Yes
+R_052_La_Pp_yr2,Year2,R,Reef,Reef,reef_ojo,La,ojo,Ojo.Laja,Low,52,Porites porites,Reef,low,Laja,L11,124,15/12/12,17/12/12,15/1/15,Yes
+R_054_C_Pp_yr2,Year2,R,Reef,Reef,reef_control,C,control,Control.Laja,High,54,Porites porites,Reef,high,Control,C20,97,15/12/12,17/12/12,15/1/15,Yes
+R_057_C_Pp_yr2,Year2,R,Reef,Reef,reef_control,C,control,Control.Laja,High,57,Porites porites,Reef,high,Control,C29,666,15/12/12,17/12/12,15/1/15,Yes
+R_058_La_Pp_yr2,Year2,R,Reef,Reef,reef_ojo,La,ojo,Ojo.Laja,Low,58,Porites porites,Reef,low,Laja,L38,666,15/12/12,17/12/12,15/1/15,Yes
