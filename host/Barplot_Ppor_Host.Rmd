@@ -1,0 +1,86 @@
+---
+title: "Barplot_Ppor_Host"
+author: "Veronica Radice"
+date: "21/04/2021"
+output: html_document
+---
+
+# Barplots of Differentially expressed genes
+
+## Coral host
+### *Porites porites*
+
+### Import libraries
+```{r}
+library(ggplot2)
+library(scales)
+library(dplyr)
+library(plyr)
+```
+
+### Resources
+https://stackoverflow.com/questions/38268741/geom-bar-ggplot2-stacked-grouped-bar-plot-with-positive-and-negative-values-p
+
+
+### Set working directory
+```{r}
+setwd("~/Documents/Rprojects/postdoc\ Rprojects/ODU_postdoc_Rprojects/Paper_Ojo_gene-expression/Porites_porites/host/")
+```
+
+
+###############################################################################
+
+# Effect of Destination: Ojo vs. Control
+
+Absolute number of DEG adjusted p-value < 0.1
+```{r}
+# import data
+de.genes <- readRDS("Ppor_Host_DE_genes_RO_RC_padj.1.rds")
+
+# add group pairwise contrast label
+de.genes$group <- 'RO-RC'
+de.genes$group <- as.factor(de.genes$group)
+dim(de.genes)
+```
+
+### Count which genes are Upregulated versus Downregulated
+LFC = log2FoldChange
+```{r}
+de.genes$LFC <- ifelse(de.genes$log2FoldChange>0, 'Up', 'Down')
+de.genes$LFC <- as.factor(de.genes$LFC)
+
+summary_DEG <- de.genes %>% dplyr::count(group, LFC)
+summary_DEG$LFC <- factor(summary_DEG$LFC, levels = c("Up", "Down"))
+
+summary_DEG[1,3] <- summary_DEG[1,3]*(-1)
+
+summary_DEG
+```
+
+# Barplot
+```{r}
+plot.combo <- ggplot(summary_DEG, aes(x = group, fill = LFC)) + 
+  geom_bar(data=subset(summary_DEG, LFC=="Up"), aes(y=n, fill = LFC), stat = "identity", width=0.6) + #, binwidth=0
+  geom_bar(data=subset(summary_DEG, LFC=="Down"), aes(y=n, fill = LFC), stat = "identity", width=0.6) + #, binwidth=0
+  geom_text(data=subset(summary_DEG, LFC=="Up"), aes(group, n, label = n), position = position_dodge(width=0.9), vjust = -0.5) +
+  geom_text(data=subset(summary_DEG, LFC=="Down"), aes(group, n, label = -n), position = position_dodge(width=0.9), vjust = 1.5) +
+  scale_fill_manual("LFC", values=c("black", "#56B4E9"), labels=c("Down-regulated", "Up-regulated"), guide=guide_legend(reverse=TRUE)) + #colorblind friendly
+  ylab("Differentially expressed genes") +
+  xlab("Transplantation") + 
+  scale_y_continuous(limits = c(-870, 500), breaks = seq(-800, 400, by = 200)) +
+  theme_classic() +
+  theme(legend.position = "none", panel.background = element_rect(colour = "black"), axis.text.x = element_text(angle = 45, vjust = 0.5)) #axis.text.x=element_text(vjust=0.5, size=10, face="italic"), #legend.position = "bottom",
+
+plot.combo
+```
+
+```{r}
+# save plot
+ggsave("Ppor_Host_DEG_barplot.pdf", plot = plot.combo,  width = 2.2, height = 4, units = "in", dpi = 1200) 
+```
+
+
+### Session Info
+```{r}
+sessionInfo()
+```

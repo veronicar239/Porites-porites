@@ -1,0 +1,447 @@
+---
+title: "DAPC_Ppor_Host"
+author: "Veronica Radice"
+date: "21/04/2021"
+output: html_document
+---
+
+
+# Coral Host *Porites porites*
+
+# Discriminant Analysis of Principal Components (DAPC)
+### A discriminant function analysis
+
+Investigating genetic diversity using multivariate approaches relies on finding synthetic
+variables built as linear combinations of alleles and which reflect as well as possible
+the genetic variation amongst the studied individuals. 
+
+However, most of the time we are not only interested in the diversity amongst individuals,
+but also and possibly more so in the diversity between groups of individuals. Typically,
+one will be analysing individual data to identify populations, or more largely genetic
+clusters, and then describe these clusters.
+
+A problem occuring in traditional methods is they usually focus on the entire genetic
+variation. Genetic variability can be decomposed using a standard multivariate ANOVA
+model as:
+
+    total variance = (variance between groups) + (variance within groups)
+
+or more simply, denoting X the data matrix:
+
+    VAR(X) = B(X) +W(X)
+
+Usual approaches such as Principal Component Analysis (PCA) or Principal Coordinates
+Analysis (PCoA / MDS) focus on VAR(X). That is, they only describe the global diversity,
+possibly overlooking differences between groups. 
+
+On the contrary, DAPC optimizes B(X) while minimizing W(X): it seeks synthetic variables, the **discriminant functions**, which show differences between groups as best as possible while minimizing variation within clusters.
+
+
+### Method
+This method aims to identify and describe genetic clusters:
+- use find.clusters to identify clusters
+- use dapc to describe the relationships between these clusters
+
+### Resources
+See DAPC tutorial using the adegenet package (Thibaut Jombart, Caitlin Collins):
+https://github.com/thibautjombart/adegenet/wiki/Tutorials
+
+Jombart T, Devillard S and Balloux F (2010) Discriminant analysis of principal components: a new method for the analysis of genetically structured populations. BMC Genetics11:94. doi:10.1186/1471-2156-11-94
+
+https://github.com/JoannaGriffiths/Coral-population-responses-to-acidification/blob/master/DAPC%20analysis/DAPC.R
+
+WGCNA_DFA_Final.R - Kenkel & Matz (2016)
+https://datadryad.org/stash/dataset/doi:10.5061/dryad.2bv13
+
+
+# Load packages 
+```{r} 
+# For first time installation 
+#library(devtools)
+#install_github("thibautjombart/adegenet")
+# or 
+#install.packages("adegenet")
+ 
+library(adegenet)
+library(SummarizedExperiment)
+library(data.table)
+library(tidyverse)
+library(plyr)
+```
+
+# Set working directory
+```{r}
+setwd("~/Documents/Rprojects/postdoc\ Rprojects/ODU_postdoc_Rprojects/Paper_Ojo_gene-expression/Porites_porites/host/")
+```
+
+
+## Import metadata
+```{r}
+meta <- read.csv("~/Documents/Rprojects/postdoc\ Rprojects/ODU_postdoc_Rprojects/Paper_Ojo_gene-expression/Porites_porites/Porites_porites_Year-2_metadata.csv", header=TRUE, row.names=1)
+
+# Remove all samples that were transplanted to the Destination Ojo.Norte
+# There is no control site for Norte Ojo
+# For now, we are focused on samples transplanted to Laja Control or Laja Ojo sites
+# This is consistent with analyses for the other 2 species in the experiment
+# Also, group sample size is too small for Ojo.Norte destination
+
+meta <- subset(meta, Destination_name != "Ojo.Norte")
+```
+
+
+```{r}
+meta$Destination_type <- revalue(meta$Destination_type, c("control" = "Control", "ojo" = "Ojo"))
+
+meta <- meta %>% unite(group, Origin_type, Destination_type, sep = ".", remove = FALSE)
+
+
+meta[sapply(meta, is.character)] <- lapply(meta[sapply(meta, is.character)], 
+                                       as.factor)
+# Colony_ID is equivalent to genotype
+meta$Colony_ID <- as.factor(meta$Colony_ID)
+
+levels(meta$group)
+```
+
+
+# select relevant metadata
+```{r}
+meta <- dplyr::select(meta, Colony_ID, group, Origin_name, Origin_type, Destination_name, Destination_type, pH_Destination)
+```
+
+### Remove samples with >85% of null/zero counts
+As in DESeq2 analysis
+```{r}
+drop <- c("R_051_C_Pp_yr2")
+
+meta <- meta[!(row.names(meta) %in% drop),]
+meta <- droplevels(meta)
+```
+
+
+### data summary
+```{r}
+meta %>%
+  group_by(group) %>%
+  dplyr::summarise(count = n())
+```
+
+
+# Import transformed counts
+
+The input file has to contain ALL the genes, not just differentially expressed ones.
+```{r}
+counts.transformed.vst <- readRDS(file = "counts_vst.BlindFalse_Ppor_Host.rds")
+```
+
+
+```{r}
+dat = as.data.frame(assay(counts.transformed.vst))
+head(dat)
+```
+
+### How do expression plots look overall?
+```{r}
+boxplot(dat, col=meta$group) 
+```
+
+### Transpose rlogged counts
+```{r}
+dat_t <- data.table::transpose(dat)
+
+# get row and colnames in order
+colnames(dat_t) <- rownames(dat)
+rownames(dat_t) <- colnames(dat)
+dat <- dat_t
+dim(dat)
+```
+
+
+### Determine how many PCs there are total
+```{r}
+pcp = prcomp(dat, retx=TRUE, center=TRUE, scale.=TRUE)
+scores = pcp$x
+#head(scores)
+
+screeplot(pcp, bstick=T)
+# there are 10 PCs
+
+# Kenkel note:  only 1st PC is non-random when using diff exp genes only; higher PCs non-random when using all data
+```
+
+
+# Cross-validation for Discriminant Analysis of Principal Components (DAPC)
+
+The Discriminant Analysis of Principal Components (DAPC) relies on dimension reduction 
+of the data using PCA followed by a linear discriminant analysis. 
+How many PCA axes to retain is often a non-trivial question. 
+
+It is important to *carefully choose the correct number of PCs so as to include most sources of variation explained by an appropriate number of PCs retained.* 
+
+One way of ensuring that you have selected the correct number of PCs is to do **cross-validation.** This is a procedure in which you leave out a certain percentage 
+of your data, run DAPC, and then see if the data that was left out 
+is correctly placed into the population.
+
+**Cross-validation:** 
+- function xvalDapc
+- an objective optimisation procedure for identifying the 'golidlocks point' in the trade-off between retaining too few and too many PCs in the model.
+- an objective way to decide how many axes to retain: 
+    - different numbers are tried 
+    - the quality of the corresponding DAPC is assessed by cross- validation: 
+        - DAPC is performed on a training set 
+          - typically made of 90% of the observations 
+            (comprising 90% of the observations in each subpopulation), 
+          - then used to predict the groups of the 10% of remaining observations. 
+
+With xvalDapc, the validation set is selected by stratified random sampling: this ensures that at least one member of each group or population in the original data is represented in both training and validation sets.
+
+The current method uses the average prediction success per group (result="groupMean"), or the overall prediction success (result="overall"). The number of PCs associated with the lowest Mean Squared Error is then retained in the DAPC.
+
+DAPC is carried out on the training set with variable numbers of PCs retained, and the
+degree to which the analysis is able to accurately predict the group membership of excluded individuals (those in the validation set) is used to identify the optimal number of PCs to
+retain. At each level of PC retention, the sampling and DAPC procedures are repeated
+n.rep times. 
+
+
+## Determine how many PCs for the group Treatment
+
+***NB! This step takes a bit of time.***
+By default, we perform 30 replicates, though it should be noted that for large datasets, performing large numbers of replicates may be computationally intensive.
+```{r}
+# Default runs 30 replicates of cross-validation
+
+xval <- xvalDapc(dat, meta$group, n.pca.max = 300, n.da = NULL, training.set = 0.9, result = "groupMean", center = TRUE, scale = FALSE, n.pca = NULL, n.rep = 30, xval.plot = TRUE)
+
+# Individual replicates appear as points, and the density of those points in different regions of the plot is displayed in blue.
+```
+
+Look for peak in the graph above. 
+
+From here, we can narrow the search by specifying the number of PC to try with n.pca and centering it around 3, and doing 100(0) replicates each.
+
+***NB! This will take a long time ! (for 100, 1000 replicates)***
+```{r}
+xval2 <- xvalDapc(dat, meta$group, n.pca.max = 300, n.da = NULL, training.set = 0.9, result = "groupMean", center = TRUE, scale = FALSE, n.pca = 1:5, n.rep = 100, xval.plot = TRUE)
+```
+
+
+Based on the model validation literature, recommended to use the number of PCs associated with the lowest RMSE as the 'optimum' n.pca in the DAPC analysis.
+- RMSE = associated root mean squared error
+
+While the number of PCs associated with the highest mean success may be associated with the lowest MSE, this is not always the case. 
+
+```{r}
+#names(xval2)
+xval2
+```
+
+Mean Successful Assignment by Number of PCs of PCA
+3
+0.7025
+
+Number of PCs Achieving Highest Mean Success
+3
+
+Root Mean Squared Error by Number of PCs of PCA
+3
+0.4160829
+
+Number of PCs Achieving Lowest MSE
+3
+
+DAPC
+- n.pca: 3 first PCs of PCA used
+- n.da: 1 discriminant functions saved
+- var (proportion of conserved variance): 0.786
+
+             
+```{r}
+xval2$DAPC # this should be the same output as dp2 below
+```
+
+
+# Graph of cumulated variance
+
+Unlike k-means, DAPC can benefit from not using too many PCs. 
+Indeed, retaining too many components with respect to the number of individuals can lead to over-fitting and unstability in the membership probabilities returned by the method.
+
+```{r}
+# *** Need to run this next line - it's interactive - so it does not knit***
+#var.explained.pca <- dapc(dat, meta$group)
+
+# ! INTERACTIVE. Open Console !
+#  Choose the number PCs to retain (>=1): 
+#3
+#  Choose the number discriminant functions to retain (>=1): 
+#1  
+```
+
+*Discriminant analysis eigenvalues*
+Eigenvalues correspond to the ratio of the variance between groups
+over the variance within groups for each discriminant function.
+The method displays a barplot of eigenvalues for the discriminant analysis,
+asking for a number of discriminant functions to retain (unless argument n.da is provided).
+For small number of clusters, all eigenvalues can be retained since all discriminant
+functions can be examined without diffculty.
+Whenever more (say, tens of) clusters are analysed,
+it is likely that the first few dimensions will carry more information than the
+others, and only those can then be retained and interpreted.
+
+
+
+The Discriminant Analysis of Principal Components (DAPC) is designed to investigate the genetic structure of biological populations. This multivariate method consists in a two-steps procedure. 
+  - First, genetic data are transformed (centred, possibly scaled) and submitted to a Principal Component Analysis (PCA). 
+  - Second, principal components of PCA are submitted to a Linear Discriminant Analysis (LDA). 
+  
+A trivial matrix operation allows to express discriminant functions as linear combination of alleles, therefore allowing one to compute allele contributions.
+
+## Establish Discriminant function for the group Treatment
+```{r}
+dp2 = dapc(dat, meta$group, n.pca = 3, n.da = 1)
+dp2
+```
+
+## scatter plot
+
+*Only used 1 discriminant function so cannot make the scatter plot as per other species*
+```{r}
+scatter <- scatter(dp2, cex = 1.5, legend = TRUE,
+        clabel = FALSE, posi.leg = "topright", 
+        cleg = 0.9, xax = 1, yax = 2, col = c("dodgerblue", "gold2", "#163343", "firebrick", "forestgreen", "bisque3")) #inset.solid = 1,
+#posi.pca = "bottomleft", 
+# , posi.inset = "bottomleft" # not working ?
+```
+
+save plot
+```{r}
+# save plot
+pdf("Ppor_Host_DAPC_scatter.pdf")
+
+scatter <- scatter(dp2, cex = 1.5, legend = TRUE,
+        clabel = FALSE, posi.leg = "topright", 
+        cleg = 0.9, xax = 1, yax = 2, col = c("dodgerblue", "gold2", "#163343", "firebrick", "forestgreen", "bisque3")) #inset.solid = 1,
+#posi.pca = "bottomleft", 
+# , posi.inset = "bottomleft" # not working ?
+
+dev.off()
+```
+
+Note that scatter can also represent a single discriminant function, which is
+especially useful when only one of these has been retained (e.g. in the case k = 2). 
+This is achieved by plotting the densities of individuals on a given discriminant function with different colors for different groups:
+
+
+```{r}
+scatter(dp2,1,1, bg="white", scree.da=FALSE, legend=TRUE, solid=.4, col = c("dodgerblue", "gold2", "#163343", "firebrick", "forestgreen", "bisque3"), cleg = 0.9)
+```
+
+save plot
+```{r}
+# save plot
+pdf("Ppor_Host_DAPC_density.pdf")
+
+scatter(dp2,1,1, bg="white", scree.da=FALSE, legend=TRUE, solid=.4, col = c("dodgerblue", "gold2", "#163343", "firebrick", "forestgreen", "bisque3"), cleg = 0.9)
+
+dev.off()
+```
+
+
+Alternate colors
+```{r}
+mycol=c("lightblue", "red", "orange", "grey", "yellow", "light green")
+scatter(dp2,1,1, scree.da = FALSE, bg = "white", col = mycol, cex = 1.5, legend = TRUE, posi.leg = "topright")
+```
+
+
+```{r}
+# assign.per.pop 
+# indicates the proportions of successful reassignment (based on the discriminant functions) # of individuals to their original clusters. 
+# Large values indicate clear-cut clusters, while low values suggest admixed groups.
+
+summary(dp2)
+
+# This information can also be visualized using assignplot()
+```
+
+
+```{r}
+plot(density(dp2$ind.coord))
+```
+
+
+```{r}
+# predict.dapc: predicts group memberships based on DAPC results
+pred3 = predict.dapc(dp2)
+plot(density(pred3$ind.scores))
+```
+
+
+This figure is the simple graphical translation of the posterior table above.
+Heat colors represent membership probabilities (red=1, white=0);
+blue crosses represent the prior cluster provided to DAPC.
+
+Such figure is particularly useful when prior biological groups are used,
+as one may infer admixed or misclassiffied individuals.
+```{r}
+assignplot(dp2)
+```
+
+
+Note that this information can also be plotted in a STRUCTURE-like (!) way using
+compoplot. We can plot information of all individuals to have a global picture of the clusters composition.
+```{r}
+compoplot(dp2)
+```
+
+
+DAPC:
+- explore structure of populations based on PCA and DA without making assumptions of panmixia. 
+- this technique provides a robust alternative to Bayesian clustering methods like STRUCTURE (Pritchard et al., 2000) that should not be used for clonal or partially clonal populations.
+- DAPC analysis is inherently interactive and cannot be scripted a priori. 
+(Refer to the vignette written by Thibaut Jombart for a more interactive analysis.)
+
+
+**In DAPC, discriminant functions are linear combinations of variables (principal components of PCA) which optimize the separation of individuals into pre-defined groups.** 
+
+Based on the retained discriminant functions, it is possible to derive group membership probabilities, which can be interpreted in order to assess how clear-cut or admixed the clusters are.
+
+In attempting to summarise high-dimensional data in a small number of meaningful
+discriminant functions, DAPC must manage a trade-offs. If too few PCs (with respect
+to the number of individuals) are retained, useful information will be excluded from the
+analysis, and the resultant model will not be informative enough to accurately discriminate
+between groups. 
+
+By contrast, if too many PCs are retained, this will have a destabilising effect on the coefficients extimated, leading to problems of overfit. In such cases, the model is able to describe all of the data in such detail that it becomes flexible enough to discriminate almost perfectly between any possible clusters. As a result, membership probabilities can become drastically inflated for the best-fitting cluster, resulting in apparent perfect discrimination. At the same time, however, the excessively complex model loses its ability to generalise to new or unseen data, as reflected in a loss of predictive capacity.
+
+--> DAPC requires enough PCs to secure a space with sufficient power of discrimination but must also avoid retaining too many dimensions that lead to over-fitting
+
+
+
+##############################################################################
+For reporting in manuscript:
+
+***See Miller et al. 2020***
+
+Box 2: Recommended standard reporting for DAPC analyses
+Our literature review of 263 empirical studies showed that many did not report run parameters necessary for transparency and rateability of analyses. In addition, based on those studies which did report such parameters, it was clear that no “standard operating procedure” has
+crystalized among researchers applying this method. Therefore, we developed the following list of parameters which should be reported in all DAPC analyses:
+
+(1) Explicitly state the clusters or clustering method used: were groups defined a priori or determined de novo using find.clusters()?
+(2) State how optimal number of K was chosen: when find.clusters() is used, how was the optimal number of clusters (K) chosen (e.g., lowest point of BIC graph or automated detection)?
+(3) Include documentation for selection of K: when using BIC, include the BIC plot or values for each K.
+(4) State the method used to determine how many PCs to retain: often a-score or xval; given that there is no “preferred” method when determining the number of PCs retained, including this data this is especially important for repeatability.
+(5) State the final number of PCs applied: this can appear either in the main text or figure legend showing the DAPC plot; inclusion of these values is essential for repeatability of the results presented.
+
+Example of minimum adequate reporting
+
+Methods: DAPC analyses were conducted twice to examine the influence of a priori groupings on the results. In the first analysis, sampling locations were used as a priori groups. In the second analysis, the find.clusters() function was used to determine the number of groups (K) de novo, with optimal K selected as that with the lowest BIC value. For both analyses, the optimal number of PCs to use in the DAPC was determined using the optim.a.score() command.
+
+Results: when sampling locations were used as a priori groups, the optimal number of PCs retained were Y. Without predefined groups, the optimal K was found to be W (see Supplementary Fig. Q for BIC plot), and the optimal number of PCs retained for analysis were Z.
+
+
+
+### Session Info
+```{r}
+sessionInfo()
+```
+
