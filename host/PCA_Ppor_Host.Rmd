@@ -370,7 +370,7 @@ plot <- DESeq2::plotPCA(counts_de, returnData = TRUE, intgroup = c("group")) %>%
       scale_fill_manual(values = c("dodgerblue", "gold2", "#163343", "firebrick", "forestgreen", "bisque3")) +
       xlab(paste0("PC1: ",percentVar[1],"% variance")) +
       ylab(paste0("PC2: ",percentVar[2],"% variance")) +
-      labs(title = "Reef-Ojo vs. Reef-Control (1720 genes)") +
+      labs(title = "Reef-Ojo vs. Reef-Control (196 genes)") +
       labs(color = "Origin.Destination", fill = "Origin.Destination") +
       theme_cowplot()
 

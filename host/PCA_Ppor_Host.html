@@ -705,7 +705,7 @@ plot &lt;- DESeq2::plotPCA(counts_de, returnData = TRUE, intgroup = c(&quot;grou
       scale_fill_manual(values = c(&quot;dodgerblue&quot;, &quot;gold2&quot;, &quot;#163343&quot;, &quot;firebrick&quot;, &quot;forestgreen&quot;, &quot;bisque3&quot;)) +
       xlab(paste0(&quot;PC1: &quot;,percentVar[1],&quot;% variance&quot;)) +
       ylab(paste0(&quot;PC2: &quot;,percentVar[2],&quot;% variance&quot;)) +
-      labs(title = &quot;Reef-Ojo vs. Reef-Control (1720 genes)&quot;) +
+      labs(title = &quot;Reef-Ojo vs. Reef-Control (196 genes)&quot;) +
       labs(color = &quot;Origin.Destination&quot;, fill = &quot;Origin.Destination&quot;) +
       theme_cowplot()
 
@@ -759,7 +759,7 @@ permanova_overall.interaction</code></pre>
 ## Terms added sequentially (first to last)
 ## 
 ##           Df SumsOfSqs  MeanSqs F.Model     R2 Pr(&gt;F)  
-## group      1   0.16708 0.167079  4.2504 0.3778 0.0234 *
+## group      1   0.16708 0.167079  4.2504 0.3778 0.0238 *
 ## Residuals  7   0.27516 0.039309         0.6222         
 ## Total      8   0.44224                  1.0000         
 ## ---
@@ -777,7 +777,7 @@ permanova_overall.interaction</code></pre>
 <h2>Pairwise PERMANOVA - Group</h2>
 <pre class="r"><code>pairwise.adonis(dist_overall, factors = meta$group,  p.adjust.m = 'fdr', perm = 9999)</code></pre>
 <pre><code>##                      pairs Df SumsOfSqs  F.Model        R2 p.value p.adjusted
-## 1 Reef.Control vs Reef.Ojo  1 0.1670789 4.250428 0.3778014  0.0252     0.0252
+## 1 Reef.Control vs Reef.Ojo  1 0.1670789 4.250428 0.3778014  0.0226     0.0226
 ##   sig
 ## 1   .</code></pre>
 <pre class="r"><code># sim.function = 'vegdist' (default)
@@ -810,7 +810,7 @@ the strata if used.</code></pre>
 ## Terms added sequentially (first to last)
 ## 
 ##           Df SumsOfSqs  MeanSqs F.Model     R2 Pr(&gt;F)  
-## group      1   0.16708 0.167079  4.2504 0.3778 0.0222 *
+## group      1   0.16708 0.167079  4.2504 0.3778  0.025 *
 ## Residuals  7   0.27516 0.039309         0.6222         
 ## Total      8   0.44224                  1.0000         
 ## ---
